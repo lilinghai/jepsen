@@ -243,6 +243,10 @@
                :color       "#E9A0CF"
                :start       #{:kill-db}
                :stop        #{:start-db}}
+              {:name        "kill flash"
+               :color       "#E9A0E3"
+               :start       #{:kill-flash}
+               :stop        #{:start-flash}}
               {:name        "pause pd"
                :color       "#C5A0E9"
                :start       #{:pause-pd}
@@ -255,6 +259,10 @@
                :color       "#A6A0E9"
                :start       #{:pause-db}
                :stop        #{:resume-db}}
+              {:name        "pause flash"
+               :color       "#9BA0E9"
+               :start       #{:pause-flash}
+               :stop        #{:resume-flash}}
               {:name        "shuffle-leader"
                :color       "#A6D0E9"
                :start       #{:shuffle-leader}
@@ -283,6 +291,8 @@
   [opts]
   (let [name (str "TiDB " (:version opts)
                   " " (name (:workload opts))
+                  (when (:tiflash-replicas opts)
+                    (str " tiflash-replicas " (:tiflash-replicas opts)))
                   (when (:auto-retry opts)
                     " auto-retry")
                   (when (not= 0 (:auto-retry-limit opts))
@@ -294,7 +304,7 @@
                   (when (:predicate-read opts)
                     " predicate-read")
                   (when (:use-index opts)
-                     " use-index")
+                    " use-index")
                   (when (:isolation opts)
                     (str " isolation " (:isolation opts)))
                   (when-not (= [:interval] (keys (:nemesis opts)))
@@ -352,9 +362,13 @@
     :parse-fn #(Double/parseDouble %)
     :validate [pos? "should be a positive number"]]
 
-    [nil "--force-reinstall" "Don't re-use an existing TiDB directory"]
+   [nil "--force-reinstall" "Don't re-use an existing TiDB directory"]
 
-    [nil "--nemesis-interval SECONDS"
+   [nil "--tiflash-replicas REPLICAS" "Set tiflash replicas (0 means disabled)"
+    :parse-fn parse-long
+    :default  2]
+
+   [nil "--nemesis-interval SECONDS"
     "Roughly how long to wait between nemesis operations. Default: 10s."
     :parse-fn parse-long
     :assoc-fn (fn [m k v] (update m :nemesis assoc :interval v))
@@ -395,6 +409,9 @@
     :default "v3.0.0-beta.1"]
 
    [nil "--tarball-url URL" "URL to TiDB tarball to install, has precedence over --version"
+    :default nil]
+
+   [nil "--tiflash-tarball-url URL" "URL to TiFlash tarball"
     :default nil]])
 
 (def test-all-opts

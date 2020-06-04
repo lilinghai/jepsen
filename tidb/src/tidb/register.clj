@@ -26,20 +26,25 @@
                                    (:read-lock test))
                               k]))))
 
-(defrecord AtomicClient [conn]
+(defrecord AtomicClient [conn tbl-created?]
   client/Client
 
   (open! [this test node]
     (assoc this :conn (c/open node test)))
 
   (setup! [this test]
-    (c/with-conn-failure-retry conn
-      (c/execute! conn ["create table if not exists test
-                        (id   int primary key,
-                         sk   int,
-                         val  int)"])
-      (when (:use-index test)
-        (c/create-index! conn ["create index test_sk_val on test (sk, val)"]))))
+    (when (compare-and-set! tbl-created? false true)
+      (c/with-conn-failure-retry conn
+        (c/execute! conn ["create table if not exists test
+                          (id   int primary key,
+                          sk   int,
+                          val  int)"])
+        (c/when-tiflash-replicas [n test]
+          (info "Set tiflash replicas of test to" n)
+          (c/execute! conn [(str "alter table test set tiflash replica " n)])
+          (Thread/sleep 10000))
+        (when (:use-index test)
+          (c/create-index! conn ["create index test_sk_val on test (sk, val)"])))))
 
   (invoke! [this test op]
     (c/with-error-handling op
@@ -74,5 +79,5 @@
   [opts]
   (let [w (lr/test (assoc opts :model (model/cas-register 0)))]
     (-> w
-        (assoc :client (AtomicClient. nil))
+        (assoc :client (AtomicClient. nil (atom false)))
         (update :generator (partial gen/stagger 1/10)))))

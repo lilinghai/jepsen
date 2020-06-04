@@ -305,3 +305,8 @@
        (catch java.sql.SQLSyntaxErrorException e
          (when-not (re-find #"index already exist" (.getMessage e))
            (throw e)))))
+
+(defmacro when-tiflash-replicas
+  [[n test] & body]
+  `(let [~n (:tiflash-replicas ~test)]
+      (when (pos? ~n) ~@body)))

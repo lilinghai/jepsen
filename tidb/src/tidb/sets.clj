@@ -1,6 +1,7 @@
 (ns tidb.sets
   (:refer-clojure :exclude [test])
   (:require [clojure.string :as str]
+            [clojure.tools.logging :refer :all]
             [jepsen [client :as client]
                     [checker :as checker]
                     [generator :as gen]]
@@ -8,16 +9,21 @@
             [tidb.sql :as c :refer :all]
             [tidb.basic :as basic]))
 
-(defrecord SetClient [conn]
+(defrecord SetClient [conn tbl-created?]
   client/Client
   (open! [this test node]
     (assoc this :conn (c/open node test)))
 
   (setup! [this test]
-    (c/with-conn-failure-retry conn
-      (c/execute! conn ["create table if not exists sets
-                        (id     int not null primary key auto_increment,
-                        value  bigint not null)"])))
+    (when (compare-and-set! tbl-created? false true)
+      (c/with-conn-failure-retry conn
+        (c/execute! conn ["create table if not exists sets
+                          (id     int not null primary key auto_increment,
+                          value  bigint not null)"])
+        (c/when-tiflash-replicas [n test]
+          (info "Set tiflash replicas of sets to" n)
+          (c/execute! conn [(str "alter table sets set tiflash replica " n)])
+          (Thread/sleep 10000)))))
 
   (invoke! [this test op]
     (c/with-error-handling op
@@ -37,16 +43,21 @@
 
 ; This variant does compare-and-set on a single text value to reveal lost
 ; updates.
-(defrecord CasSetClient [conn]
+(defrecord CasSetClient [conn tbl-created?]
   client/Client
   (open! [this test node]
     (assoc this :conn (c/open node test)))
 
   (setup! [this test]
-    (c/with-conn-failure-retry conn
-      (c/execute! conn ["create table if not exists sets
-                        (id     int not null primary key,
-                        value   text)"])))
+    (when (compare-and-set! tbl-created? false true)
+      (c/with-conn-failure-retry conn
+        (c/execute! conn ["create table if not exists sets
+                          (id     int not null primary key,
+                          value   text)"])
+        (c/when-tiflash-replicas [n test]
+          (info "Set tiflash replicas of sets to" n)
+          (c/execute! conn [(str "alter table sets set tiflash replica " n)])
+          (Thread/sleep 10000)))))
 
   (invoke! [this test op]
     (c/with-txn op [c conn {:isolation (get test :isolation :repeatable-read)}]
@@ -88,11 +99,11 @@
 (defn workload
   [opts]
   (let [c (:concurrency opts)]
-    {:client (SetClient. nil)
+    {:client (SetClient. nil (atom false))
      :generator (->> (gen/reserve (/ c 2) (adds) (reads))
                      (gen/stagger 1/10))
      :checker (checker/set-full)}))
 
 (defn cas-workload
   [opts]
-  (assoc (workload opts) :client (CasSetClient. nil)))
+  (assoc (workload opts) :client (CasSetClient. nil (atom false))))

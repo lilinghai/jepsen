@@ -26,6 +26,10 @@
       (do (c/execute! conn [(str "create table if not exists t"
                                  (:value op)
                                  " (id int not null primary key, val int)")])
+          (c/when-tiflash-replicas [n test]
+            (info "Set tiflash replicas of t" (:value op) "to" n)
+            (c/execute! conn [(str "alter table t" (:value op) " set tiflash replica " n)])
+            (Thread/sleep 10000))
           (swap! last-created-table (fn [x x'] (if (nil? x)
                                                  x'
                                                  (max x x')))

@@ -1,0 +1,13 @@
+log-file = "__DEPLOY_DIR__/tiflash-log.d/tiflash_tikv.log"
+
+[rocksdb]
+wal-dir = ""
+
+[server]
+addr           = "0.0.0.0:20170"
+advertise-addr = "__HOSTNAME__:20170"
+status-addr    = "__HOSTNAME__:20292"
+engine-addr    = "__HOSTNAME__:3930"
+
+[storage]
+data-dir = "__DEPLOY_DIR__/data/kv-learner"

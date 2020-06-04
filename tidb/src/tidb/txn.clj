@@ -48,21 +48,27 @@
                       k k (str v) (str v)])]
              v))]))
 
-(defrecord Client [conn val-type table-count]
+(defrecord Client [conn val-type table-count tbl-created?]
   client/Client
   (open! [this test node]
     (assoc this :conn (c/open node test)))
 
   (setup! [this test]
-    (dotimes [i table-count]
-      (c/with-conn-failure-retry conn
-        (c/execute! conn [(str "create table if not exists " (table-name i)
-                               " (id  int not null primary key,
-                               sk  int not null,
-                               val " val-type ")")])
-        (when (:use-index test)
-          (c/create-index! conn [(str "create index " (table-name i) "_sk_val"
-                                      " on " (table-name i) " (sk, val)")])))))
+    (locking Client
+      (when (compare-and-set! tbl-created? false true)
+        (dotimes [i table-count]
+          (c/with-conn-failure-retry conn
+            (c/execute! conn [(str "create table if not exists " (table-name i)
+                                   " (id  int not null primary key,
+                                   sk  int not null,
+                                   val " val-type ")")])
+            (c/when-tiflash-replicas [n test]
+              (info "Set tiflash replicas of" (table-name i) "to" n)
+              (c/execute! conn [(str "alter table " (table-name i) " set tiflash replica " n)])
+              (when (= i (- table-count 1)) (Thread/sleep 10000)))
+            (when (:use-index test)
+              (c/create-index! conn [(str "create index " (table-name i) "_sk_val"
+                                          " on " (table-name i) " (sk, val)")])))))))
 
   (invoke! [this test op]
     (let [txn      (:value op)
@@ -89,4 +95,5 @@
   [opts]
   (Client. nil
            (:val-type opts "int")
-           (:table-count opts 7)))
+           (:table-count opts 7)
+           (atom false)))

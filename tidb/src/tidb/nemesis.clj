@@ -17,7 +17,7 @@
             [slingshot.slingshot :refer [try+ throw+]]))
 
 (defn process-nemesis
-  "A nemesis that can pause, resume, start, stop, and kill tidb, tikv, and pd."
+  "A nemesis that can pause, resume, start, stop, and kill tidb, tikv, tiflash, and pd."
   []
   (reify nemesis/Nemesis
     (setup! [this test] this)
@@ -26,8 +26,8 @@
       (let [nodes (:nodes test)
             nodes (case (:f op)
                     ; When resuming, resume all nodes
-                    (:resume-pd :resume-kv :resume-db
-                     :start-pd  :start-kv  :start-db) nodes
+                    (:resume-pd :resume-kv :resume-db :resume-flash
+                     :start-pd  :start-kv  :start-db  :start-flash) nodes
 
                     (util/random-nonempty-subset nodes))
             ; If the op wants to give us nodes, that's great
@@ -36,18 +36,22 @@
                (c/on-nodes test nodes
                            (fn [test node]
                              (case (:f op)
-                               :start-pd  (db/start-pd! test node)
-                               :start-kv  (db/start-kv! test node)
-                               :start-db  (db/start-db! test node)
-                               :kill-pd   (db/stop-pd!  test node)
-                               :kill-kv   (db/stop-kv!  test node)
-                               :kill-db   (db/stop-db!  test node)
-                               :pause-pd  (cu/signal! db/pd-bin :STOP)
-                               :pause-kv  (cu/signal! db/kv-bin :STOP)
-                               :pause-db  (cu/signal! db/db-bin :STOP)
-                               :resume-pd (cu/signal! db/pd-bin :CONT)
-                               :resume-kv (cu/signal! db/kv-bin :CONT)
-                               :resume-db (cu/signal! db/db-bin :CONT)))))))
+                               :start-pd     (db/start-pd!    test node)
+                               :start-kv     (db/start-kv!    test node)
+                               :start-db     (db/start-db!    test node)
+                               :start-flash  (db/start-flash! test node)
+                               :kill-pd      (db/stop-pd!     test node)
+                               :kill-kv      (db/stop-kv!     test node)
+                               :kill-db      (db/stop-db!     test node)
+                               :kill-flash   (db/stop-flash!  test node)
+                               :pause-pd     (cu/signal! db/pd-bin :STOP)
+                               :pause-kv     (cu/signal! db/kv-bin :STOP)
+                               :pause-db     (cu/signal! db/db-bin :STOP)
+                               :pause-flash  (cu/signal! db/flash-bin :STOP)
+                               :resume-pd    (cu/signal! db/pd-bin :CONT)
+                               :resume-kv    (cu/signal! db/kv-bin :CONT)
+                               :resume-db    (cu/signal! db/db-bin :CONT)
+                               :resume-flash (cu/signal! db/flash-bin :CONT)))))))
 
     (teardown! [this test])))
 
@@ -150,21 +154,24 @@
   "Merges together all nemeses"
   []
   (nemesis/compose
-    {#{:start-pd  :start-kv  :start-db
-       :kill-pd   :kill-kv   :kill-db
-       :pause-pd  :pause-kv  :pause-db
-       :resume-pd :resume-kv :resume-db}    (process-nemesis)
+    {#{:start-pd  :start-kv  :start-db  :start-flash
+       :kill-pd   :kill-kv   :kill-db   :kill-flash
+       :pause-pd  :pause-kv  :pause-db  :pause-flash
+       :resume-pd :resume-kv :resume-db :resume-flash}
+     (process-nemesis)
      #{:shuffle-leader  :del-shuffle-leader
        :shuffle-region  :del-shuffle-region
-       :random-merge    :del-random-merge}  (schedule-nemesis)
+       :random-merge    :del-random-merge}
+     (schedule-nemesis)
      ; #{:slow-primary}                       (slow-primary-nemesis)
      {:start-partition :start
-      :stop-partition  :stop}               (nemesis/partitioner nil)
+      :stop-partition  :stop}
+     (nemesis/partitioner nil)}))
      ; {:reset-clock          :reset
      ;  :strobe-clock         :strobe
      ;  :check-clock-offsets  :check-offsets
      ;  :bump-clock           :bump}          (nt/clock-nemesis)
-     }))
+     ; }))
 
 ; Generators
 
@@ -258,12 +265,16 @@
              (op :start-kv))
           (o {:kill-db (op :kill-db)}
              (op :start-db))
+          (o {:kill-flash (op :kill-flash)}
+             (op :start-flash))
           (o {:pause-pd (op :pause-pd)}
              (op :resume-pd))
           (o {:pause-kv (op :pause-kv)}
              (op :resume-kv))
           (o {:pause-db (op :pause-db)}
              (op :resume-db))
+          (o {:pause-flash (op :pause-flash)}
+             (op :resume-flash))
           (o {:shuffle-leader (op :shuffle-leader)}
              (op :del-shuffle-leader))
           (o {:shuffle-region (op :shuffle-region)}
@@ -296,9 +307,11 @@
          (:pause-pd n)        (conj :resume-pd)
          (:pause-kv n)        (conj :resume-kv)
          (:pause-db n)        (conj :resume-db)
+         (:puase-flash n)     (conj :resume-flash)
          (:kill-pd n)         (conj :start-pd)
          (:kill-kv n)         (conj :start-kv)
          (:kill-db n)         (conj :start-db)
+         (:kill-flash n)      (conj :start-flash)
          (:shuffle-leader n)  (conj :del-shuffle-leader)
          (:shuffle-region n)  (conj :del-shuffle-region)
          (:random-merge n)    (conj :del-random-merge)
@@ -368,18 +381,21 @@
 
 (defn expand-options
   "We support shorthand options in nemesis maps, like :kill, which expands to
-  :kill-pd, :kill-kv, and :kill-db. This function expands those."
+  :kill-pd, :kill-kv, :kill-flash, and :kill-db. This function expands those."
   [n]
   (cond-> n
     (:kill n) (assoc :kill-pd true
                      :kill-kv true
-										 :kill-db true)
-    (:stop n) (assoc :stop-pd true
+                     :kill-db true
+                     :kill-flash true)
+    (:stop n) (assoc :kill-pd true
                      :kill-kv true
-                     :kill-db true)
+                     :kill-db true
+                     :kill-flash true)
     (:pause n) (assoc :pause-pd true
                       :pause-kv true
-                      :pause-db true)
+                      :pause-db true
+                      :pause-flash true)
     (:schedules n) (assoc :shuffle-leader true
                           :shuffle-region true
                           :random-merge true)

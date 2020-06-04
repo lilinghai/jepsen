@@ -53,12 +53,17 @@
 
   (setup! [this test]
     (locking SequentialClient
-      (c/with-conn-failure-retry conn
-        (info "Creating tables" (pr-str (table-names table-count)))
-        (doseq [t (table-names table-count)]
-          (c/execute! conn [(str "create table if not exists " t
-                                 " (tkey varchar(255) primary key)")])
-          (info "Created table" t)))))
+      (when (compare-and-set! tbl-created? false true)
+        (c/with-conn-failure-retry conn
+          (info "Creating tables" (pr-str (table-names table-count)))
+          (doseq [t (table-names table-count)]
+            (c/execute! conn [(str "create table if not exists " t
+                                   " (tkey varchar(255) primary key)")])
+            (info "Created table" t)
+            (c/when-tiflash-replicas [n test]
+              (info "Set tiflash replicas of" t "to" n)
+              (c/execute! conn [(str "alter table " t " set tiflash replica " n)])
+              (when (= t (last (table-names table-count))) (Thread/sleep 10000))))))))
 
   (invoke! [this test op]
     (let [ks (subkeys (:key-count test) (:value op))]

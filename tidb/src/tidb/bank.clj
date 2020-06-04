@@ -39,7 +39,12 @@
               (c/insert! conn :accounts {:id      a
                                          :balance (if (= a (first (:accounts test)))
                                                     (:total-amount test)
-                                                    0)}))
+                                                    0)})
+              (c/when-tiflash-replicas [n test]
+                (when (= a (last (:accounts test)))
+                  (info "Set tiflash replicas of accounts to" n)
+                  (c/execute! conn [(str "alter table accounts set tiflash replica " n)])
+                  (Thread/sleep 10000))))
             (catch java.sql.SQLIntegrityConstraintViolationException e nil))))))
 
   (invoke! [this test op]
@@ -115,8 +120,11 @@
                             :balance (if (= a (first (:accounts test)))
                                        (:total-amount test)
                                        0)})
-                (catch java.sql.SQLIntegrityConstraintViolationException e
-                  nil))))))))
+                (c/when-tiflash-replicas [n test]
+                  (info "Set tiflash replicas of accounts" a "to" n)
+                  (c/execute! conn [(str "alter table accounts" a " set tiflash replica " n)])
+                  (when (= a (last (:accounts test))) (Thread/sleep 10000)))
+                (catch java.sql.SQLIntegrityConstraintViolationException e nil))))))))
 
   (invoke! [this test op]
       (try

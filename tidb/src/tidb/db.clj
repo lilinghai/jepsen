@@ -22,10 +22,13 @@
 
 (def tidb-dir       "/opt/tidb")
 (def tidb-bin-dir   "/opt/tidb/bin")
+(def tiflash-dir    "/opt/tidb/bin/tiflash")
 (def pd-bin         "pd-server")
 (def pdctl-bin      "pd-ctl")
 (def kv-bin         "tikv-server")
 (def db-bin         "tidb-server")
+(def flash-bin      "tiflash")
+
 (def pd-config-file (str tidb-dir "/pd.conf"))
 (def pd-log-file    (str tidb-dir "/pd.log"))
 (def pd-stdout      (str tidb-dir "/pd.stdout"))
@@ -41,6 +44,13 @@
 (def db-slow-file   (str tidb-dir "/slow.log"))
 (def db-stdout      (str tidb-dir "/db.stdout"))
 (def db-pid-file    (str tidb-dir "/db.pid"))
+
+(def flash-startup-script      (str tidb-bin-dir "/start-tiflash.sh"))
+(def flash-config-file         (str tidb-dir "/tiflash.toml"))
+(def flash-learner-config-file (str tidb-dir "/tiflash-learner.toml"))
+(def flash-log-dir             (str tidb-dir "/tiflash-log.d"))
+(def flash-stdout              (str tidb-dir "/tiflash.stdout"))
+(def flash-pid-file            (str tidb-dir "/tiflash.pid"))
 
 (def client-port 2379)
 (def peer-port   2380)
@@ -86,6 +96,13 @@
        (map (fn [node] (str (name node) ":" client-port)))
        (str/join ",")))
 
+(defn db-status-endpoints
+  "Constructs tidb_status_addr string for tiflash config"
+  [test]
+  (->> (:nodes test)
+       (map (fn [node] (str (name node) ":10080")))
+       (str/join ",")))
+
 (defn configure-pd!
   "Writes configuration file for placement driver"
   []
@@ -101,12 +118,26 @@
   []
   (c/su (c/exec :echo (slurp (io/resource "tidb.conf")) :> db-config-file)))
 
+(defn configure-flash!
+  "Writes configuration file for tiflash"
+  [test node]
+  (c/su
+    (c/exec :echo (slurp (io/resource "tiflash.toml")) :> flash-config-file)
+    (c/exec :echo (slurp (io/resource "tiflash-learner.toml")) :> flash-learner-config-file)
+    (c/exec :echo (slurp (io/resource "start-tiflash.sh")) :> flash-startup-script)
+    (c/exec :chmod :+x flash-startup-script)
+    (c/exec :sed :-i (str "s,__DEPLOY_DIR__," tidb-dir ",") flash-config-file flash-learner-config-file flash-startup-script)
+    (c/exec :sed :-i (str "s/__HOSTNAME__/" (name node) "/") flash-config-file flash-learner-config-file)
+    (c/exec :sed :-i (str "s/__PD_ADDR__/" (pd-endpoints test) "/") flash-config-file)
+    (c/exec :sed :-i (str "s/__TIDB_STATUS_ADDR__/" (db-status-endpoints test) "/") flash-config-file)))
+
 (defn configure!
   "Write all config files."
-  []
+  [test node]
   (configure-pd!)
   (configure-kv!)
-  (configure-db!))
+  (configure-db!)
+  (configure-flash! test node))
 
 (defn pd-api-path
   "Constructs an API path for the PD located on the given node."
@@ -214,6 +245,19 @@
       :--config    db-config-file
       :--log-file  db-log-file)))
 
+(defn start-flash!
+  "Starts the TiFlash daemon"
+  [test node]
+  (c/su
+    (cu/start-daemon!
+      {:logfile flash-stdout
+       :pidfile flash-pid-file
+       :chdir   tidb-dir
+       }
+      "./bin/start-tiflash.sh"
+      :server
+      :--config-file flash-config-file)))
+
 (defn page-ready?
   "Fetches a status page URL on the local node, and returns true iff the page
   was available."
@@ -236,6 +280,12 @@
   "Is TiDB ready?"
   []
   (page-ready? "http://127.0.0.1:10080/status"))
+
+(defn flash-ready?
+  "Is TiFlash ready?"
+  []
+  ; TODO: maybe there is a better way?
+  (page-ready? "http://127.0.0.1:20170/status"))
 
 (defn restart-loop*
   "TiDB is fragile on startup; processes love to crash if they can't complete
@@ -308,6 +358,14 @@
                       (cu/daemon-running? db-pid-file)  :starting
                       true                              :crashed)))
 
+(defn start-wait-flash!
+  "Starts TiFlash, waiting for the health page to come online."
+  [test node]
+  (restart-loop :flash (start-flash! test node)
+                (cond (flash-ready?)                      :ready
+                      (cu/daemon-running? flash-pid-file) :starting
+                      true                                :crashed)))
+
 (defn stop-pd! [test node] (c/su
                              ; Faketime wrapper means we only kill the wrapper
                              ; script, not the underlying binary
@@ -320,10 +378,14 @@
 (defn stop-db! [test node] (c/su (cu/stop-daemon! db-bin db-pid-file)
                                  (cu/grepkill! db-bin)))
 
+(defn stop-flash! [test node] (c/su (cu/stop-daemon! flash-bin flash-pid-file)
+                                    (cu/grepkill! flash-bin)))
+
 (defn stop!
   "Stops all daemons"
   [test node]
   (stop-db! test node)
+  (stop-flash! test node)
   (stop-kv! test node)
   (stop-pd! test node))
 
@@ -357,6 +419,10 @@
       (info node "installing TiDB")
       (info (tarball-url test))
       (cu/install-archive! (tarball-url test) tidb-dir)
+      (when-let [tiflash-tarball-url (:tiflash-tarball-url test)]
+        (info node "installing TiFlash")
+        (info tiflash-tarball-url)
+        (cu/install-archive! tiflash-tarball-url tiflash-dir))
       (info "Syncing disks to avoid slow fsync on db start")
       (c/exec :sync))
     ; (if-let [ratio (:faketime test)]
@@ -416,7 +482,7 @@
     (setup! [_ test node]
       (c/su
         (install! test node)
-        (configure!)
+        (configure! test node)
 
         (try+ (start-wait-pd! test node)
               ; If we don't synchronize, KV might explode because PD isn't
@@ -435,8 +501,11 @@
 
               (Thread/sleep 5000)
 
-              ; OK, now we can start TiDB itself
+              ; OK, now we can start TiDB and TiFlash
               (start-wait-db! test node)
+
+              (start-wait-flash! test node)
+              (jepsen/synchronize test)
 
               (Thread/sleep 30000)
 
@@ -478,10 +547,19 @@
 
     db/LogFiles
     (log-files [_ test node]
-      [db-log-file
-       db-slow-file
-       db-stdout
-       kv-log-file
-       kv-stdout
-       pd-log-file
-       pd-stdout])))
+      (let [flash-logs (->> (c/exec :ls flash-log-dir :|| :true)
+                            (str/split-lines)
+                            (remove empty?)
+                            (map #(str flash-log-dir "/" %)))]
+        (into [db-log-file
+               db-slow-file
+               db-stdout
+               kv-log-file
+               kv-stdout
+               pd-log-file
+               pd-stdout
+               flash-stdout
+               ; also backup configs of tiflash since they are generated dynamicly
+               flash-config-file
+               flash-learner-config-file]
+               flash-logs)))))

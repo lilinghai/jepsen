@@ -14,7 +14,8 @@
             [jepsen.tests.cycle :as cycle]
             [jepsen.tests.cycle.append :as append]
             [tidb [sql :as c :refer :all]
-                  [txn :as txn]]))
+                  [txn :as txn]
+                  [basic :as basic]]))
 
 (defn read-key
   "Read a specific key's value from the table. Missing values are represented
@@ -34,19 +35,24 @@
        (into (sorted-map))))
   ;(zipmap ks (map (partial read-key c test) ks)))
 
-(defrecord IncrementClient [conn]
+(defrecord IncrementClient [conn tbl-created?]
   client/Client
   (open! [this test node]
     (assoc this :conn (c/open node test)))
 
   (setup! [this test]
-    (c/with-conn-failure-retry conn
-      (c/execute! conn ["create table if not exists cycle
-                        (pk  int not null primary key,
-                         sk  int not null,
-                         val int)"])
-      (when (:use-index test)
-        (c/create-index! conn ["create index cycle_sk_val on cycle (sk, val)"]))))
+    (when (compare-and-set! tbl-created? false true)
+      (c/with-conn-failure-retry conn
+        (c/execute! conn ["create table if not exists cycle
+                          (pk  int not null primary key,
+                          sk  int not null,
+                          val int)"])
+        (c/when-tiflash-replicas [n test]
+          (info "Set tiflash replicas of cycle to" n)
+          (c/execute! conn [(str "alter table cycle set tiflash replica " n)])
+          (Thread/sleep 10000))
+        (when (:use-index test)
+          (c/create-index! conn ["create index cycle_sk_val on cycle (sk, val)"])))))
 
   (invoke! [this test op]
     (c/with-txn op [c conn {:isolation (get test :isolation :repeatable-read)}]
@@ -101,7 +107,7 @@
 (defn inc-workload
   [opts]
   (let [key-count 8]
-    {:client (IncrementClient. nil)
+    {:client (IncrementClient. nil (atom false))
      :checker (checker/compose
                 {:cycle (cycle/checker
                           (cycle/combine cycle/monotonic-key-graph
@@ -119,7 +125,7 @@
     :max-txn-length       Maximum number of operations per txn
     :max-writes-per-key   Maximum number of operations per key"
   ([opts]
-   (wr-txns opts {:active-keys (vec (range (:key-count opts)))}))
+   (wr-txns opts {:active-keys (vec (range (:key-count opts 5)))}))
   ([opts state]
    (lazy-seq
      (let [min-length           (:min-txn-length opts 0)

@@ -1,0 +1,69 @@
+default_profile = "default"
+display_name    = "TiFlash"
+http_port       = 8123
+listen_host     = "0.0.0.0"
+mark_cache_size = 5368709120
+path            = "__DEPLOY_DIR__/data/flash"
+tmp_path        = "__DEPLOY_DIR__/tmp/flash"
+tcp_port        = 9000
+
+[application]
+runAsDaemon = true
+
+[flash]
+service_addr     = "__HOSTNAME__:3930"
+tidb_status_addr = "__TIDB_STATUS_ADDR__"
+[flash.flash_cluster]
+cluster_manager_path = "__DEPLOY_DIR__/bin/tiflash/flash_cluster_manager"
+log                  = "__DEPLOY_DIR__/tiflash-log.d/tiflash_cluster_manager.log"
+master_ttl           = 60
+refresh_interval     = 20
+update_rule_interval = 5
+[flash.proxy]
+config = "__DEPLOY_DIR__/tiflash-learner.toml"
+
+[logger]
+level    = "debug"
+log      = "__DEPLOY_DIR__/tiflash-log.d/tiflash.log"
+errorlog = "__DEPLOY_DIR__/tiflash-log.d/tiflash_error.log"
+size     = "1000M"
+count    = 20
+
+[profiles]
+[profiles.default]
+load_balancing = "random"
+max_memory_usage = 10000000000
+use_uncompressed_cache = 0
+[profiles.readonly]
+readonly = 1
+
+[quotas]
+[quotas.default]
+[quotas.default.interval]
+duration = 3600
+errors = 0
+execution_time = 0
+queries = 0
+read_rows = 0
+result_rows = 0
+
+[raft]
+pd_addr = "__PD_ADDR__"
+storage_engine = "dt"
+
+[status]
+metrics_port = 8234
+
+[users]
+[users.default]
+password = ""
+profile = "default"
+quota = "default"
+[users.default.networks]
+ip = "::/0"
+[users.readonly]
+password = ""
+profile = "readonly"
+quota = "default"
+[users.readonly.networks]
+ip = "::/0"
