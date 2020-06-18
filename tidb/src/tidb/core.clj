@@ -145,9 +145,11 @@
     :kill-pd
     :kill-kv
     :kill-db
+    :kill-flash
     :pause-pd
     :pause-kv
     :pause-db
+    :pause-flash
     :schedules
     :shuffle-leader
     :shuffle-region
@@ -159,7 +161,7 @@
 
 (def process-faults
   "Faults affecting individual processes"
-  [:kill-pd :kill-kv :kill-db :pause-pd :pause-kv :pause-db])
+  [:kill-pd :kill-kv :kill-db :kill-flash :pause-pd :pause-kv :pause-db :pause-flash])
 
 (def network-faults
   "Faults affecting the network"
@@ -293,6 +295,8 @@
                   " " (name (:workload opts))
                   (when (:tiflash-replicas opts)
                     (str " tiflash-replicas " (:tiflash-replicas opts)))
+                  (when (:tidb-isolation-read-engines opts)
+                    (str " tidb-isolation-read-engines " (:tidb-isolation-read-engines opts)))
                   (when (:auto-retry opts)
                     " auto-retry")
                   (when (not= 0 (:auto-retry-limit opts))
@@ -446,6 +450,10 @@
                   (parse-long x)))
     :validate [(fn [x] (or (= :default x) (not (neg? x))))
                "Must not be negative"]]
+
+   [nil "--tidb-isolation-read-engines ENGINE" "Set session variable tidb_isolation_read_engines."
+    :default "tikv,tiflash"
+    :validate [#{"tikv,tiflash" "tikv" "tiflash"} "Must be 'tikv,tiflash', 'tikv' or 'tiflash'"]]
 
    [nil "--predicate-read" "If present, try to read using a query over a secondary key, rather than by primary key. Implied by --use-index."
     :default false]
