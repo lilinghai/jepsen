@@ -14,6 +14,7 @@
                     [tests :as tests]
                     [util :as util]]
             [jepsen.os.debian :as debian]
+            [jepsen.os.centos :as centos]
             [tidb [bank :as bank]
                   [db :as db]
                   [long-fork :as long-fork]
@@ -27,6 +28,7 @@
 (def oses
   "Supported operating systems"
   {"debian" debian/os
+   "centos" centos/os
    "none"   os/noop})
 
 (def workloads
@@ -282,7 +284,7 @@
   (let [name (str "TiDB " (:version opts)
                   " " (name (:workload opts))
                   (when (:auto-retry opts)
-                    " auto-retry ")
+                    " auto-retry")
                   (when (not= 0 (:auto-retry-limit opts))
                     (str " auto-retry-limit " (:auto-retry-limit opts)))
                   (when (:update-in-place opts)
@@ -292,7 +294,11 @@
                   (when (:predicate-read opts)
                     " predicate-read")
                   (when (:use-index opts)
-                     " use-index")
+                    " use-index")
+                  (when (:txn-mode opts)
+                    (str " txn-mode " (:txn-mode opts)))
+                  (when (:isolation opts)
+                    (str " isolation " (:isolation opts)))
                   (when-not (= [:interval] (keys (:nemesis opts)))
                     (str " nemesis " (->> (dissoc (:nemesis opts)
                                                    :interval
@@ -319,7 +325,6 @@
            opts
            (dissoc workload :final-generator)
            {:name       name
-            :os         debian/os
             :db         (db/db)
             :client     (:client workload)
             :nemesis    (:nemesis nemesis)
@@ -377,7 +382,7 @@
     :assoc-fn (fn [m k v] (update m :nemesis assoc :schedule v))
     :validate [#{:fixed :random} "Must be either 'fixed' or 'random'"]]
 
-   ["-o" "--os NAME" "debian, or none"
+   ["-o" "--os NAME" "debian, centos, or none"
     :default debian/os
     :parse-fn oses
     :validate [identity (jc/one-of oses)]]
@@ -453,6 +458,12 @@
    [nil "--txn-mode MODE" "Which transaction mode the test uses"
     :default "optimistic"
     :validate [#{"optimistic" "pessimistic" "mixed"} "Must be 'optimistic', 'pessimistic' or 'mixed'"]]
+
+   [nil "--isolation LEVEL" "Which isolation level to use for test"
+    :parse-fn {"repeatable-read" :repeatable-read
+               "read-committed"  :read-committed}
+    :default :repeatable-read
+    :validate [#{:repeatable-read :read-committed} "Must be one of 'repeatable-read', 'read-committed'"]]
 
    [nil "--follower-read" "whether to open follower read"
     :default false]])

@@ -69,7 +69,7 @@
           use-txn? (< 1 (count txn))]
           ;use-txn? false]
           (if use-txn?
-            (c/with-txn op [c conn]
+            (c/with-txn op [c conn {:isolation (get test :isolation :repeatable-read)}]
               (assoc op :type :ok, :value
                      (mapv (partial mop! c test table-count) txn)))
             (c/with-error-handling op

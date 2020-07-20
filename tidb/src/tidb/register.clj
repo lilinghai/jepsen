@@ -44,7 +44,7 @@
   (invoke! [this test op]
     (c/with-error-handling op
       (c/with-txn-aborts op
-        (j/with-db-transaction [c conn]
+        (j/with-db-transaction [c conn {:isolation (get test :isolation :repeatable-read)}]
           (let [[id val'] (:value op)]
             (case (:f op)
               :read (assoc op

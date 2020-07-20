@@ -393,7 +393,7 @@
       (throw+ {:type :gave-up-waiting-for-replica-count}))
 
     (let [regions (await-http (pd-regions node))]
-      ;(info :regions (with-out-str (pprint regions)))
+      ; (info :regions (with-out-str (pprint regions)))
       (info :region-replicas (->> (:regions regions)
                                   (map (fn [region]
                                          [(:id region)
@@ -402,7 +402,8 @@
                                                count)]))
                                   (into (sorted-map))
                                   pprint
-                                  with-out-str))
+                                  with-out-str
+                                  clojure.string/trim))
       (if (every? region-ready? (:regions regions))
         true
         (do (Thread/sleep 10000)

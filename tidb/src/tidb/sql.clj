@@ -257,7 +257,7 @@
 (defmacro with-txn
   "Executes body in a transaction, with a timeout, automatically retrying
   conflicts and handling common errors."
-  [op [c conn] & body]
+  [op [c conn opts] & body]
   `(timeout (+ 1000 socket-timeout) (assoc ~op :type :info, :error :timed-out)
             (with-error-handling ~op
               (with-txn-retries
@@ -271,7 +271,7 @@
                 ; level; both report the current transaction isolation level as
                 ; 4 (repeatable read), and have identical effects.
                 ;(j/with-db-transaction [~c ~conn :isolation :repeatable-read]
-                (j/with-db-transaction [~c ~conn]
+                (j/with-db-transaction [~c ~conn ~opts]
                   ; PingCAP added this start-transaction statement below. I
                   ; have concerns about this--it's not clear to me whether
                   ; starting, and not committing, this nested transaction does

@@ -43,7 +43,7 @@
             (catch java.sql.SQLIntegrityConstraintViolationException e nil))))))
 
   (invoke! [this test op]
-    (with-txn op [c conn]
+    (with-txn op [c conn {:isolation (get test :isolation :repeatable-read)}]
       (try
         (case (:f op)
           :read (->> (c/query c [(str "select * from accounts")])
@@ -119,48 +119,49 @@
                   nil))))))))
 
   (invoke! [this test op]
-    (with-txn op [c conn]
       (try
         (case (:f op)
           :read
-          (->> (:accounts test)
-               (map (fn [x]
-                      [x (->> (c/query c [(str "select balance from accounts"
-                                               x)]
-                                       {:row-fn :balance})
-                              first)]))
-               (into (sorted-map))
-               (assoc op :type :ok, :value))
+          (with-txn op [c conn {:isolation :repeatable-read}]
+            (->> (:accounts test)
+                (map (fn [x]
+                        [x (->> (c/query c [(str "select balance from accounts"
+                                                x)]
+                                         {:row-fn :balance})
+                                first)]))
+                (into (sorted-map))
+                (assoc op :type :ok, :value)))
 
           :transfer
-          (let [{:keys [from to amount]} (:value op)
-                from (str "accounts" from)
-                to   (str "accounts" to)
-                b1 (-> c
-                       (c/query
-                        [(str "select balance from " from
-                              " " (:read-lock test))]
-                        {:row-fn :balance})
-                       first
-                       (- amount))
-                b2 (-> c
-                       (c/query [(str "select balance from " to
-                                      " " (:read-lock test))]
-                                {:row-fn :balance})
-                       first
-                       (+ amount))]
-            (cond (neg? b1)
-                  (assoc op :type :fail, :error [:negative from b1])
-                  (neg? b2)
-                  (assoc op :type :fail, :error [:negative to b2])
-                  true
-                  (if (:update-in-place test)
-                    (do (c/execute! c [(str "update " from " set balance = balance - ? where id = 0") amount])
-                        (c/execute! c [(str "update " to " set balance = balance + ? where id = 0") amount])
-                        (assoc op :type :ok :value (transfer_value (txn_ts c)  from to b1 b2 amount)))
-                    (do (c/update! c from {:balance b1} ["id = 0"])
-                        (c/update! c to {:balance b2} ["id = 0"])
-                        (assoc op :type :ok :value (transfer_value (txn_ts c)  from to b1 b2 amount))))))))))
+          (with-txn op [c conn {:isolation (get test :isolation :repeatable-read)}]
+            (let [{:keys [from to amount]} (:value op)
+                  from (str "accounts" from)
+                  to   (str "accounts" to)
+                  b1 (-> c
+                        (c/query
+                          [(str "select balance from " from
+                                " " (:read-lock test))]
+                          {:row-fn :balance})
+                        first
+                        (- amount))
+                  b2 (-> c
+                        (c/query [(str "select balance from " to
+                                        " " (:read-lock test))]
+                                  {:row-fn :balance})
+                        first
+                        (+ amount))]
+              (cond (neg? b1)
+                    (assoc op :type :fail, :error [:negative from b1])
+                    (neg? b2)
+                    (assoc op :type :fail, :error [:negative to b2])
+                    true
+                    (if (:update-in-place test)
+                      (do (c/execute! c [(str "update " from " set balance = balance - ? where id = 0") amount])
+                          (c/execute! c [(str "update " to " set balance = balance + ? where id = 0") amount])
+                          (assoc op :type :ok :value (transfer_value (txn_ts c)  from to b1 b2 amount)))
+                      (do (c/update! c from {:balance b1} ["id = 0"])
+                          (c/update! c to {:balance b2} ["id = 0"])
+                          (assoc op :type :ok :value (transfer_value (txn_ts c)  from to b1 b2 amount))))))))))
 
   (teardown! [_ test]
     (if (and (= "n1" (:tidb.sql/node conn)) (not= 100 (cal-sum-total @(:history test))))

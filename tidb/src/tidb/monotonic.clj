@@ -49,7 +49,7 @@
         (c/create-index! conn ["create index cycle_sk_val on cycle (sk, val)"]))))
 
   (invoke! [this test op]
-    (c/with-txn op [c conn]
+    (c/with-txn op [c conn {:isolation (get test :isolation :repeatable-read)}]
     ;(let [c conn]
       (case (:f op)
         :read (let [v (read-keys c test (shuffle (keys (:value op))))]
@@ -119,7 +119,7 @@
     :max-txn-length       Maximum number of operations per txn
     :max-writes-per-key   Maximum number of operations per key"
   ([opts]
-   (wr-txns opts {:active-keys (vec (range (:key-count opts)))}))
+   (wr-txns opts {:active-keys (vec (range (:key-count opts 5)))}))
   ([opts state]
    (lazy-seq
      (let [min-length           (:min-txn-length opts 0)
@@ -208,5 +208,5 @@
                                  :max-writes-per-key  16})
                    (map (fn [txn] {:type :invoke, :f :txn, :value txn}))
                    gen/seq)
-   :checker (append/checker {:anomalies         [:G-single]
+   :checker (append/checker {:anomalies         [(if (= :read-committed (:isolation opts)) :G1 :G-single)]
                              :additional-graphs [cycle/realtime-graph]})})

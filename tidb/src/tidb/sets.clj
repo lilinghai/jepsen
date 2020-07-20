@@ -49,7 +49,7 @@
                         value   text)"])))
 
   (invoke! [this test op]
-    (c/with-txn op [c conn]
+    (c/with-txn op [c conn {:isolation (get test :isolation :repeatable-read)}]
       (case (:f op)
         :add  (let [e (:value op)]
                 (if-let [v (-> (c/query c [(str "select (value) from sets"
